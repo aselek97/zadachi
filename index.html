@@ -696,7 +696,7 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','
 function createTask(p){
   if(!p||!p.title)return;
   const maxOrder=state.tasks.reduce((m,x)=>Math.max(m,x.order||0),0);
-  state.tasks.push({id:uid(),title:p.title,project:p.project||'Входящие',priority:p.priority||4,due:p.due||(p.repeat?todayStr():null),dueTime:p.dueTime||null,labels:p.labels||[],done:false,created:Date.now(),repeat:p.repeat||null,repeatN:p.repeatN||null,subtasks:[],order:maxOrder+1});
+  state.tasks.push({id:uid(),title:p.title,project:p.project||'Входящие',priority:p.priority||4,due:p.due||(p.repeat?todayStr():null),dueTime:p.dueTime||null,labels:p.labels||[],done:false,created:Date.now(),repeat:p.repeat||null,repeatN:p.repeatN||null,subtasks:Array.isArray(p.subtasks)?p.subtasks:[],order:maxOrder+1});
   save();render();
 }
 function addTask(text){ if(!text.trim())return; createTask(parseQuickAdd(text)); }
@@ -977,7 +977,15 @@ function openChat(){
 }
 function closeChat(){document.getElementById('chat-panel').classList.remove('open')}
 function describeAction(a){
-  if(a.type==='add'&&a.task)return '➕ Добавить: «'+a.task.title+'»'+(a.task.due?' — '+fmtDate(a.task.due)+(a.task.dueTime?', '+a.task.dueTime:''):'')+(a.task.project&&a.task.project!=='Входящие'?' · '+a.task.project:'');
+  if(a.type==='add'&&a.task){
+    const subs=Array.isArray(a.task.subtasks)?a.task.subtasks.filter(s=>typeof s==='string'&&s.trim()):[];
+    return '➕ Добавить: «'+a.task.title+'»'+(a.task.due?' — '+fmtDate(a.task.due)+(a.task.dueTime?', '+a.task.dueTime:''):'')+(a.task.project&&a.task.project!=='Входящие'?' · '+a.task.project:'')+(subs.length?' · подзадачи: '+subs.join(', '):'');
+  }
+  if(a.type==='add_subtask'&&a.id){
+    const t=state.tasks.find(x=>x.id===a.id);const name=t?t.title:a.id;
+    const ts=(Array.isArray(a.titles)?a.titles:[]).filter(s=>typeof s==='string'&&s.trim());
+    return '➕ Подзадачи в «'+name+'»: '+ts.join(', ');
+  }
   if(a.type==='update'){
     const t=state.tasks.find(x=>x.id===a.id);const name=t?t.title:a.id;const c=a.changes||{};const ch=[];
     if('title'in c)ch.push('название → «'+c.title+'»');
@@ -1003,8 +1011,17 @@ function applyActions(actions){
         dueTime:(typeof tk.dueTime==='string'&&/^\d{2}:\d{2}$/.test(tk.dueTime))?tk.dueTime:null,
         priority:[1,2,3,4].includes(+tk.priority)?+tk.priority:4,
         repeat:['daily','weekdays','weekly','monthly','everyN'].includes(tk.repeat)?tk.repeat:null,
-        repeatN:tk.repeat==='everyN'?Math.max(1,parseInt(tk.repeatN)||1):null});
+        repeatN:tk.repeat==='everyN'?Math.max(1,parseInt(tk.repeatN)||1):null,
+        subtasks:Array.isArray(tk.subtasks)?tk.subtasks.filter(s=>typeof s==='string'&&s.trim()).map(s=>({id:uid(),title:s.trim(),done:false})):[]});
       n++;
+    }else if(a.type==='add_subtask'&&a.id&&Array.isArray(a.titles)){
+      const t=state.tasks.find(x=>x.id===a.id);
+      if(t){
+        if(!Array.isArray(t.subtasks))t.subtasks=[];
+        const adds=a.titles.filter(s=>typeof s==='string'&&s.trim());
+        adds.forEach(s=>t.subtasks.push({id:uid(),title:s.trim(),done:false}));
+        if(adds.length)n++;
+      }
     }else if(a.type==='update'&&a.id){
       const t=state.tasks.find(x=>x.id===a.id);if(t&&a.changes){const c=a.changes;
         if('title'in c&&c.title)t.title=String(c.title);
@@ -1033,15 +1050,17 @@ function renderActions(actions){
 async function chatAI(){
   const today=todayStr();
   const wd=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'][new Date().getDay()];
-  const taskCtx=state.tasks.filter(t=>!t.done).map(t=>({id:t.id,title:t.title,project:t.project,due:t.due,dueTime:t.dueTime,priority:t.priority,labels:t.labels,repeat:t.repeat}));
+  const taskCtx=state.tasks.filter(t=>!t.done).map(t=>({id:t.id,title:t.title,project:t.project,due:t.due,dueTime:t.dueTime,priority:t.priority,labels:t.labels,repeat:t.repeat,subtasks:(t.subtasks||[]).map(s=>s.title)}));
   const sys=`Ты — помощник-планировщик внутри приложения задач. Сегодня ${today} (${wd}). Отвечай кратко и по делу, на русском.
 Доступные проекты: ${state.projects.join(', ')}.
 Когда уместно — предлагай конкретные изменения задач. Бери id ТОЛЬКО из списка ниже, не выдумывай.
 Верни СТРОГО JSON: {"reply": "<краткий ответ пользователю>", "actions": [ ... ]}.
 Виды действий:
-- {"type":"add","task":{"title","project","labels":[],"due":"YYYY-MM-DD|null","dueTime":"HH:MM|null","priority":1-4,"repeat":null,"repeatN":null}}
+- {"type":"add","task":{"title","project","labels":[],"due":"YYYY-MM-DD|null","dueTime":"HH:MM|null","priority":1-4,"repeat":null,"repeatN":null,"subtasks":["подзадача 1","подзадача 2"]}}  // "subtasks" необязательно — массив строк-названий
 - {"type":"update","id":"<id>","changes":{ любые из: "title","project","labels","due","dueTime","priority","done" }}
+- {"type":"add_subtask","id":"<id задачи>","titles":["подзадача 1","подзадача 2"]}  // добавить подзадачи (чек-листа) в существующую задачу
 - {"type":"delete","id":"<id>"}
+Если просят разбить задачу на шаги/пункты/чек-лист — используй add_subtask с id этой задачи. У задач в контексте поле "subtasks" — это уже существующие подзадачи (не дублируй их).
 Если изменения не нужны — "actions": []. В "reply" коротко поясни, что предлагаешь.
 Текущие активные задачи (JSON): ${JSON.stringify(taskCtx)}`;
   const contents=chatHistory.map(m=>({role:m.role==='model'?'model':'user',parts:[{text:m.text}]}));
