@@ -986,6 +986,10 @@ function describeAction(a){
     const ts=(Array.isArray(a.titles)?a.titles:[]).filter(s=>typeof s==='string'&&s.trim());
     return '➕ Подзадачи в «'+name+'»: '+ts.join(', ');
   }
+  if(a.type==='move_to_subtask'&&a.id&&a.parentId){
+    const s=state.tasks.find(x=>x.id===a.id);const p=state.tasks.find(x=>x.id===a.parentId);
+    return '📥 Перенести «'+(s?s.title:a.id)+'» в подзадачи «'+(p?p.title:a.parentId)+'»';
+  }
   if(a.type==='update'){
     const t=state.tasks.find(x=>x.id===a.id);const name=t?t.title:a.id;const c=a.changes||{};const ch=[];
     if('title'in c)ch.push('название → «'+c.title+'»');
@@ -1021,6 +1025,17 @@ function applyActions(actions){
         const adds=a.titles.filter(s=>typeof s==='string'&&s.trim());
         adds.forEach(s=>t.subtasks.push({id:uid(),title:s.trim(),done:false}));
         if(adds.length)n++;
+      }
+    }else if(a.type==='move_to_subtask'&&a.id&&a.parentId&&a.id!==a.parentId){
+      const src=state.tasks.find(x=>x.id===a.id);
+      const par=state.tasks.find(x=>x.id===a.parentId);
+      if(src&&par){
+        if(!Array.isArray(par.subtasks))par.subtasks=[];
+        par.subtasks.push({id:uid(),title:src.title,done:!!src.done});
+        // переносим и собственные подзадачи исходной задачи (плоско)
+        (src.subtasks||[]).forEach(s=>{if(s&&s.title)par.subtasks.push({id:uid(),title:s.title,done:!!s.done})});
+        state.tasks=state.tasks.filter(x=>x.id!==a.id);
+        n++;
       }
     }else if(a.type==='update'&&a.id){
       const t=state.tasks.find(x=>x.id===a.id);if(t&&a.changes){const c=a.changes;
@@ -1059,8 +1074,10 @@ async function chatAI(){
 - {"type":"add","task":{"title","project","labels":[],"due":"YYYY-MM-DD|null","dueTime":"HH:MM|null","priority":1-4,"repeat":null,"repeatN":null,"subtasks":["подзадача 1","подзадача 2"]}}  // "subtasks" необязательно — массив строк-названий
 - {"type":"update","id":"<id>","changes":{ любые из: "title","project","labels","due","dueTime","priority","done" }}
 - {"type":"add_subtask","id":"<id задачи>","titles":["подзадача 1","подзадача 2"]}  // добавить подзадачи (чек-листа) в существующую задачу
+- {"type":"move_to_subtask","id":"<id переносимой задачи>","parentId":"<id задачи-получателя>"}  // превратить существующую задачу в подзадачу другой
 - {"type":"delete","id":"<id>"}
 Если просят разбить задачу на шаги/пункты/чек-лист — используй add_subtask с id этой задачи. У задач в контексте поле "subtasks" — это уже существующие подзадачи (не дублируй их).
+Если просят перенести/сделать одну задачу подзадачей другой — используй ОДНО действие move_to_subtask (НЕ комбинацию delete+add_subtask). Подзадача хранит только название и галочку; дата/приоритет/проект исходной задачи при переносе не сохраняются.
 Если изменения не нужны — "actions": []. В "reply" коротко поясни, что предлагаешь.
 Текущие активные задачи (JSON): ${JSON.stringify(taskCtx)}`;
   const contents=chatHistory.map(m=>({role:m.role==='model'?'model':'user',parts:[{text:m.text}]}));
