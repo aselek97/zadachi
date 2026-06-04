@@ -45,6 +45,7 @@
 
   /* Task list */
   .date-group{margin:22px 0 6px;font-size:13px;font-weight:700;color:#444}
+  .date-group.today{color:var(--accent)}
   .task{display:flex;align-items:flex-start;gap:12px;padding:11px 6px;border-bottom:1px solid var(--line);cursor:pointer}
   .task:hover{background:#fff}
   .task:hover .del{opacity:1}
@@ -249,10 +250,9 @@
       <div id="view-title"></div>
       <div id="view-sub"></div>
       <div id="quickadd">
-        <input id="qa-input" placeholder="Пишите как другу…  напр.: панели сайт правки послезавтра до конца рабочего дня" autocomplete="off">
+        <input id="qa-input" placeholder="Новая задача…" autocomplete="off">
         <button id="qa-btn">Добавить</button>
       </div>
-      <div id="qa-hint">Понимаю по-человечески: <code>завтра</code> <code>послезавтра</code> <code>через 3 дня</code> <code>в пятницу</code> <code>на выходных</code> · время <code>до конца дня</code> <code>в 18:00</code> <code>утром</code> · клиента и проект угадаю сам (⚙️ Правила)</div>
       <div id="refine" class="refine-bar"></div>
       <div id="list"></div>
     </div>
@@ -431,6 +431,9 @@ function save(){localStorage.setItem(STORE_KEY,JSON.stringify(state));if(typeof 
 function todayStr(){const d=new Date();return iso(d)}
 function iso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
 function addDays(n){const d=new Date();d.setDate(d.getDate()+n);return iso(d)}
+function addDaysStr(s,n){const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return iso(d)}
+// Понедельник текущей недели (неделя пн–вс)
+function weekStart(){const d=new Date();const dow=(d.getDay()+6)%7;d.setDate(d.getDate()-dow);return iso(d)}
 const MONTHS=['янв','фев','мар','апр','ма','июн','июл','авг','сен','окт','ноя','дек'];
 function fmtDate(s){
   if(!s)return'';
@@ -572,7 +575,7 @@ function getViewTasks(ignoreRefine){
   const t=todayStr();
   let res=[];
   if(view.type==='today')res=activeTasks().filter(x=>x.due&&x.due<=t);
-  else if(view.type==='week'){const end=addDays(6);res=activeTasks().filter(x=>x.due&&x.due>=t&&x.due<=end);}
+  else if(view.type==='week'){const start=weekStart();const end=addDaysStr(start,6);res=activeTasks().filter(x=>x.due&&x.due>=start&&x.due<=end);}
   else if(view.type==='date')res=activeTasks().filter(x=>x.due===view.value);
   else if(view.type==='upcoming')res=activeTasks().filter(x=>x.due&&x.due>t);
   else if(view.type==='inbox')res=activeTasks().filter(x=>x.project==='Входящие');
@@ -637,7 +640,6 @@ function renderNav(){
     navItem('today',null,'Сегодня','📅',null,`data-drop-date="${todayStr()}"`)+
     navItem('week',null,'Неделя','🗓')+
     dateNav+
-    navItem('upcoming',null,'Предстоящие','🗓',null,`data-drop-date="${addDays(1)}"`)+
     navItem('inbox',null,'Входящие','📥')+
     navItem('important',null,'Важное','🚩')+
     navItem('all',null,'Все задачи','📋')+
@@ -662,7 +664,7 @@ function renderMain(){
   const sub=document.getElementById('view-sub');
   if(view.type==='today'){const d=new Date();sub.textContent=d.getDate()+' '+['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'][d.getMonth()]+', '+['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'][d.getDay()];}
   else if(view.type==='date')sub.textContent=fmtDateFull(view.value)+' · '+tasks.length+' задач';
-  else if(view.type==='week')sub.textContent='с '+fmtDate(todayStr())+' по '+fmtDate(addDays(6));
+  else if(view.type==='week')sub.textContent='с '+fmtDate(weekStart())+' по '+fmtDate(addDaysStr(weekStart(),6));
   else sub.textContent=tasks.length+' задач';
 
   const list=document.getElementById('list');
@@ -673,9 +675,12 @@ function renderMain(){
   if(view.type==='week'){
     const groups={};
     tasks.forEach(t=>{(groups[t.due]=groups[t.due]||[]).push(t)});
+    const start=weekStart();const WDF=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
     for(let i=0;i<7;i++){
-      const d=addDays(i);
-      html+=`<div class="date-group" data-drop-date="${d}">${fmtDate(d)}</div>`;
+      const d=addDaysStr(start,i);const dd=new Date(d+'T00:00:00');
+      let lbl=WDF[dd.getDay()].charAt(0).toUpperCase()+WDF[dd.getDay()].slice(1)+', '+dd.getDate()+' '+MONTHS[dd.getMonth()];
+      if(d===todayStr())lbl+=' · сегодня';
+      html+=`<div class="date-group${d===todayStr()?' today':''}" data-drop-date="${d}">${lbl}</div>`;
       const day=groups[d]||[];
       if(day.length)day.forEach(t=>html+=taskHTML(t));
       else html+=`<div class="day-empty">—</div>`;
