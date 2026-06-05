@@ -93,6 +93,17 @@
   .refine-chip .dot{width:8px;height:8px}
   .refine-sep{width:1px;height:16px;background:#e5e5e5;margin:0 4px}
 
+  /* Overdue carryover bar */
+  .overdue-bar{display:flex;align-items:center;gap:9px;background:#fdeceb;border:1px solid #f5c6c2;color:var(--red);border-radius:9px;padding:9px 13px;font-size:13px;margin-bottom:14px}
+  .overdue-bar button{margin-left:auto;background:var(--red);color:#fff;border:none;border-radius:7px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .overdue-bar button:hover{background:#b03c33}
+  body.dark .overdue-bar{background:#3a2420;border-color:#5a2e28}
+
+  /* Toast */
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(18px);background:#333;color:#fff;padding:11px 18px;border-radius:9px;font-size:13px;box-shadow:0 4px 18px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:80;max-width:90vw;text-align:center}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  body.dark #toast{background:#e6e6e6;color:#1a1a1a}
+
   /* Dark theme */
   body.dark{--bg:#1a1a1a;--side:#202020;--line:#2e2e2e;--text:#e6e6e6;--muted:#8a8a8a}
   body.dark .nav-item{color:#cfcfcf}
@@ -234,6 +245,7 @@
 <body>
 <button id="menu-btn" aria-label="Меню">☰</button>
 <div id="backdrop"></div>
+<div id="toast"></div>
 <div id="app">
   <aside id="sidebar">
     <h1>✓ Мои задачи</h1>
@@ -684,7 +696,11 @@ function renderMain(){
   if(!tasks.length&&view.type!=='week'){list.innerHTML=`<div class="empty"><div class="big">🎉</div>Здесь пусто. Отдыхай или добавь задачу выше.</div>`;return}
 
   let html='';
-  if(view.type==='week'){
+  if(view.type==='today'){
+    const od=overdueTasks();
+    if(od.length)html+=`<div class="overdue-bar">⚠️ Просрочено: ${od.length} ${od.length===1?'задача':od.length<5?'задачи':'задач'}<button data-move-overdue>Перенести на сегодня</button></div>`;
+    tasks.forEach(t=>html+=taskHTML(t));
+  } else if(view.type==='week'){
     const groups={};
     tasks.forEach(t=>{(groups[t.due]=groups[t.due]||[]).push(t)});
     const start=weekStart();const WDF=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
@@ -739,6 +755,14 @@ function taskHTML(t){
   </div>`;
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+let toastTimer=null;
+function toast(msg){
+  const el=document.getElementById('toast');if(!el)return;
+  el.textContent=msg;el.classList.add('show');
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3200);
+}
+function overdueTasks(){const t=todayStr();return activeTasks().filter(x=>x.due&&x.due<t)}
+function moveOverdueToday(){const t=todayStr();overdueTasks().forEach(x=>x.due=t);save();render()}
 
 // ---------- actions ----------
 function createTask(p){
@@ -816,12 +840,13 @@ ${state.keywordsText||''}
 }
 async function aiAddTask(text){
   const fallback=parseQuickAdd(text); // мгновенный резерв на случай сбоя/таймаута
-  let p=fallback;
+  let p=fallback,usedAI=false;
   try{
     const ai=await Promise.race([askAI(text),new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),8000))]);
-    if(ai&&ai.title)p=ai;
+    if(ai&&ai.title){p=ai;usedAI=true;}
   }catch(e){console.warn('ИИ недоступен, использую правила:',e&&e.message)}
   createTask(p);
+  if(!usedAI)toast('ИИ недоступен (лимит на сегодня) — разобрала по правилам');
 }
 async function submitQuickAdd(){
   const i=document.getElementById('qa-input');const text=i.value;
@@ -907,6 +932,8 @@ document.addEventListener('change',e=>{
 document.getElementById('qa-btn').onclick=submitQuickAdd;
 document.getElementById('qa-input').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submitQuickAdd()}});
 document.addEventListener('click',e=>{
+  const movOd=e.target.closest('[data-move-overdue]');
+  if(movOd){const n=overdueTasks().length;moveOverdueToday();toast('Перенесено на сегодня: '+n);return}
   const rproj=e.target.closest('[data-rproj]');
   if(rproj){
     const newProj=rproj.dataset.rproj||null;
