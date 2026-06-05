@@ -83,6 +83,10 @@
   #m-cancel{background:#eee;color:#444}
   #m-del{background:#fff;color:var(--red);border:1px solid #f0d0cc}
   .row2{display:flex;gap:10px}.row2>div{flex:1}
+  #modal textarea{width:100%;border:1px solid #ddd;border-radius:7px;padding:9px 11px;font-size:14px;outline:none;font-family:inherit;resize:vertical;min-height:44px}
+  #modal textarea:focus{border-color:var(--accent)}
+  body.dark #modal textarea{background:#1f1f1f;border-color:#3a3a3a;color:var(--text)}
+  .task-note{font-size:12.5px;color:var(--muted);margin-top:5px;white-space:pre-wrap;word-break:break-word;line-height:1.4}
 
   /* Refine bar */
   .refine-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 16px}
@@ -303,6 +307,8 @@
       </div>
       <div id="m-repeatn-wrap" style="display:none"><label>Каждые (дней)</label><input id="m-repeatn" type="number" min="1" value="3"></div>
     </div>
+    <label>Комментарий</label>
+    <textarea id="m-note" rows="2" placeholder="Необязательно"></textarea>
     <label>Подзадачи</label>
     <div id="m-subs"></div>
     <button id="m-sub-add" type="button">+ подзадача</button>
@@ -423,7 +429,7 @@ function normalize(s){
   s.theme=s.theme||'light';
   if(s.keywordsText==null)s.keywordsText=DEFAULT_KEYWORDS;
   if(s.aiEnabled===undefined)s.aiEnabled=true;
-  s.tasks=(s.tasks||[]).map(t=>({...t,labels:t.labels||[],subtasks:t.subtasks||[],repeat:t.repeat||null,repeatN:t.repeatN||null,dueTime:t.dueTime||null}));
+  s.tasks=(s.tasks||[]).map(t=>({...t,labels:t.labels||[],subtasks:t.subtasks||[],repeat:t.repeat||null,repeatN:t.repeatN||null,dueTime:t.dueTime||null,note:t.note||''}));
   // миграция: переименование проекта «Агентство» → «Сделаем»
   s.projects=s.projects.map(p=>p==='Агентство'?'Сделаем':p);
   s.tasks.forEach(t=>{if(t.project==='Агентство')t.project='Сделаем';});
@@ -744,11 +750,13 @@ function taskHTML(t){
       `<div class="subtask" data-subcheck="${t.id}|${s.id}"><div class="sub-check ${s.done?'done':''}">${s.done?'✓':''}</div><div class="sub-title ${s.done?'done':''}">${esc(s.title)}</div></div>`).join('')+`</div>`;
   }
   const pc=t.priority<4?` p${t.priority}`:'';
+  const note=t.note?`<div class="task-note">${esc(t.note)}</div>`:'';
   return `<div class="task" draggable="${IS_TOUCH?'false':'true'}" data-id="${t.id}">
     <div class="check${pc}" data-check="${t.id}"></div>
     <div class="task-body">
       <div class="task-title">${esc(t.title)}</div>
       <div class="task-meta">${subToggle}${due}${time}${repeat}${proj}${labels}</div>
+      ${note}
       ${subHTML}
     </div>
     <button class="del" data-del="${t.id}">×</button>
@@ -768,7 +776,7 @@ function moveOverdueToday(){const t=todayStr();overdueTasks().forEach(x=>x.due=t
 function createTask(p){
   if(!p||!p.title)return;
   const maxOrder=state.tasks.reduce((m,x)=>Math.max(m,x.order||0),0);
-  state.tasks.push({id:uid(),title:p.title,project:p.project||'Входящие',priority:p.priority||4,due:p.due||(p.repeat?todayStr():null),dueTime:p.dueTime||null,labels:p.labels||[],done:false,created:Date.now(),repeat:p.repeat||null,repeatN:p.repeatN||null,subtasks:Array.isArray(p.subtasks)?p.subtasks:[],order:maxOrder+1});
+  state.tasks.push({id:uid(),title:p.title,project:p.project||'Входящие',priority:p.priority||4,due:p.due||(p.repeat?todayStr():null),dueTime:p.dueTime||null,labels:p.labels||[],note:p.note||'',done:false,created:Date.now(),repeat:p.repeat||null,repeatN:p.repeatN||null,subtasks:Array.isArray(p.subtasks)?p.subtasks:[],order:maxOrder+1});
   save();render();
 }
 function addTask(text){ if(!text.trim())return; createTask(parseQuickAdd(text)); }
@@ -894,6 +902,7 @@ function openModal(id){
   document.getElementById('m-labels').value=t.labels.join(', ');
   document.getElementById('m-repeat').value=t.repeat||'';
   document.getElementById('m-repeatn').value=t.repeatN||3;
+  document.getElementById('m-note').value=t.note||'';
   syncRepeatN();
   editSubs=(t.subtasks||[]).map(s=>({...s}));
   renderSubEditor();
@@ -911,6 +920,7 @@ function saveModal(){
   t.labels=document.getElementById('m-labels').value.split(',').map(s=>s.trim()).filter(Boolean);
   t.repeat=document.getElementById('m-repeat').value||null;
   t.repeatN=t.repeat==='everyN'?Math.max(1,+document.getElementById('m-repeatn').value||1):null;
+  t.note=document.getElementById('m-note').value.trim();
   if(t.repeat&&!t.due)t.due=todayStr();
   t.subtasks=editSubs.map(s=>({...s,title:s.title.trim()})).filter(s=>s.title);
   save();closeModal();render();
