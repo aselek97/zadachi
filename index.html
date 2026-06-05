@@ -276,7 +276,7 @@
     </div>
     <div class="row2">
       <div><label>Дата и время</label><div style="display:flex;gap:6px"><input id="m-due" type="date" style="flex:1"><input id="m-time" type="time" style="width:104px"></div></div>
-      <div id="m-labels-field"><label>Метки (через запятую)</label><input id="m-labels" placeholder="внутр, СГЛА"></div>
+      <div><label>Метки (через запятую)</label><input id="m-labels" placeholder="внутр, СГЛА"></div>
     </div>
     <div class="row2">
       <div><label>Повтор</label>
@@ -330,7 +330,6 @@
 <script>
 const STORE_KEY = 'myTasksData_v1';
 const PR = {1:'var(--red)',2:'var(--orange)',3:'var(--blue)',4:'var(--grey)'};
-const LABELED_PROJECT = 'Фриланс'; // метки применяются только к этому проекту
 const PROJ_COLOR = {'Входящие':'#808080','Личное':'#246fe0','Сделаем':'#299438','Фриланс':'#eb8909'};
 const REPEAT_LABEL = {daily:'каждый день',weekdays:'по будням',weekly:'каждую неделю',monthly:'каждый месяц'};
 const DEFAULT_KEYWORDS = `панели, альпекс = Фриланс, @внешнее, @Альпекс
@@ -417,8 +416,6 @@ function normalize(s){
   s.projects=s.projects.map(p=>p==='Агентство'?'Сделаем':p);
   s.tasks.forEach(t=>{if(t.project==='Агентство')t.project='Сделаем';});
   if(s.keywordsText)s.keywordsText=s.keywordsText.replace(/Агентство/g,'Сделаем');
-  // метки используются только во фрилансе — снимаем их с остальных проектов
-  s.tasks.forEach(t=>{if(t.project!==LABELED_PROJECT&&t.labels.length)t.labels=[];});
   // backfill manual order: preserve current look (by due, then priority) for tasks missing order
   if(s.tasks.some(t=>typeof t.order!=='number')){
     const seq=[...s.tasks].sort((a,b)=>{
@@ -627,7 +624,9 @@ function renderRefine(){
   if(view.type==='done'){el.innerHTML='';return}
   const projChips=state.projects.filter(p=>p!=='Входящие').map(p=>
     `<div class="refine-chip ${refine.project===p?'active':''}" data-rproj="${p}"><span class="dot" style="background:${PROJ_COLOR[p]||'#999'}"></span>${p}</div>`).join('');
-  const labels=[...new Set(state.tasks.flatMap(t=>t.labels))];
+  // метки показываем только те, что есть в выбранном проекте (или все, если проект не выбран)
+  const labelPool=refine.project?state.tasks.filter(t=>t.project===refine.project):state.tasks;
+  const labels=[...new Set(labelPool.flatMap(t=>t.labels))];
   const labelChips=labels.map(l=>
     `<div class="refine-chip ${refine.label===l?'active':''}" data-rlabel="${l}">@${l}</div>`).join('');
   el.innerHTML=
@@ -745,9 +744,7 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','
 function createTask(p){
   if(!p||!p.title)return;
   const maxOrder=state.tasks.reduce((m,x)=>Math.max(m,x.order||0),0);
-  const proj=p.project||'Входящие';
-  const labels=proj===LABELED_PROJECT?(p.labels||[]):[];
-  state.tasks.push({id:uid(),title:p.title,project:proj,priority:p.priority||4,due:p.due||(p.repeat?todayStr():null),dueTime:p.dueTime||null,labels,done:false,created:Date.now(),repeat:p.repeat||null,repeatN:p.repeatN||null,subtasks:Array.isArray(p.subtasks)?p.subtasks:[],order:maxOrder+1});
+  state.tasks.push({id:uid(),title:p.title,project:p.project||'Входящие',priority:p.priority||4,due:p.due||(p.repeat?todayStr():null),dueTime:p.dueTime||null,labels:p.labels||[],done:false,created:Date.now(),repeat:p.repeat||null,repeatN:p.repeatN||null,subtasks:Array.isArray(p.subtasks)?p.subtasks:[],order:maxOrder+1});
   save();render();
 }
 function addTask(text){ if(!text.trim())return; createTask(parseQuickAdd(text)); }
@@ -870,7 +867,6 @@ function openModal(id){
   document.getElementById('m-due').value=t.due||'';
   document.getElementById('m-time').value=t.dueTime||'';
   document.getElementById('m-labels').value=t.labels.join(', ');
-  syncLabelsField();
   document.getElementById('m-repeat').value=t.repeat||'';
   document.getElementById('m-repeatn').value=t.repeatN||3;
   syncRepeatN();
@@ -887,19 +883,13 @@ function saveModal(){
   t.priority=+document.getElementById('m-priority').value;
   t.due=document.getElementById('m-due').value||null;
   t.dueTime=document.getElementById('m-time').value||null;
-  t.labels=t.project===LABELED_PROJECT?document.getElementById('m-labels').value.split(',').map(s=>s.trim()).filter(Boolean):[];
+  t.labels=document.getElementById('m-labels').value.split(',').map(s=>s.trim()).filter(Boolean);
   t.repeat=document.getElementById('m-repeat').value||null;
   t.repeatN=t.repeat==='everyN'?Math.max(1,+document.getElementById('m-repeatn').value||1):null;
   if(t.repeat&&!t.due)t.due=todayStr();
   t.subtasks=editSubs.map(s=>({...s,title:s.title.trim()})).filter(s=>s.title);
   save();closeModal();render();
 }
-// Метки используются только во фрилансерских задачах
-function syncLabelsField(){
-  document.getElementById('m-labels-field').style.display=
-    document.getElementById('m-project').value===LABELED_PROJECT?'':'none';
-}
-document.getElementById('m-project').addEventListener('change',syncLabelsField);
 function syncRepeatN(){
   document.getElementById('m-repeatn-wrap').style.display=
     document.getElementById('m-repeat').value==='everyN'?'block':'none';
@@ -918,7 +908,15 @@ document.getElementById('qa-btn').onclick=submitQuickAdd;
 document.getElementById('qa-input').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submitQuickAdd()}});
 document.addEventListener('click',e=>{
   const rproj=e.target.closest('[data-rproj]');
-  if(rproj){refine.project=rproj.dataset.rproj||null;render();return}
+  if(rproj){
+    refine.project=rproj.dataset.rproj||null;
+    // если активная метка не встречается в выбранном проекте — сбрасываем её на «Все»
+    if(refine.label){
+      const pool=refine.project?state.tasks.filter(t=>t.project===refine.project):state.tasks;
+      if(!pool.some(t=>(t.labels||[]).includes(refine.label)))refine.label=null;
+    }
+    render();return;
+  }
   const rlabel=e.target.closest('[data-rlabel]');
   if(rlabel){refine.label=rlabel.dataset.rlabel||null;render();return}
   const dnav=e.target.closest('#date-nav');
@@ -1135,7 +1133,6 @@ function applyActions(actions){
         if('dueTime'in c)t.dueTime=(typeof c.dueTime==='string'&&/^\d{2}:\d{2}$/.test(c.dueTime))?c.dueTime:null;
         if('priority'in c&&[1,2,3,4].includes(+c.priority))t.priority=+c.priority;
         if('done'in c)t.done=!!c.done;
-        if(t.project!==LABELED_PROJECT)t.labels=[]; // метки только во фрилансе
         n++;
       }
     }else if(a.type==='delete'&&a.id){
