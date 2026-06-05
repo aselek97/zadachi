@@ -909,8 +909,16 @@ document.getElementById('qa-input').addEventListener('keydown',e=>{if(e.key==='E
 document.addEventListener('click',e=>{
   const rproj=e.target.closest('[data-rproj]');
   if(rproj){
-    refine.project=rproj.dataset.rproj||null;
-    // если активная метка не встречается в выбранном проекте — сбрасываем её на «Все»
+    const newProj=rproj.dataset.rproj||null;
+    // если открыт вид метки (сайдбар «Метки») и в выбранном проекте этой метки нет —
+    // выходим из метки и открываем сам проект (метка «слетает»)
+    if(view.type==='label'&&newProj&&!state.tasks.some(t=>t.project===newProj&&(t.labels||[]).includes(view.value))){
+      refine={project:null,label:null};
+      view={type:'project',value:newProj};
+      render();return;
+    }
+    refine.project=newProj;
+    // если активная метка-фильтр не встречается в выбранном проекте — сбрасываем её на «Все»
     if(refine.label){
       const pool=refine.project?state.tasks.filter(t=>t.project===refine.project):state.tasks;
       if(!pool.some(t=>(t.labels||[]).includes(refine.label)))refine.label=null;
