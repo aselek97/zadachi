@@ -136,6 +136,8 @@
   #rules-toggle:hover{background:rgba(128,128,128,.12)}
   #sync-toggle{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:7px;cursor:pointer;font-size:13px;color:var(--muted);user-select:none}
   #sync-toggle:hover{background:rgba(128,128,128,.12)}
+  #aitest-toggle{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:7px;cursor:pointer;font-size:13px;color:var(--muted);user-select:none}
+  #aitest-toggle:hover{background:rgba(128,128,128,.12)}
   #sync-toggle.synced{color:#299438}
   #ai-toggle{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:7px;cursor:pointer;font-size:13px;color:var(--muted);user-select:none}
   #ai-toggle:hover{background:rgba(128,128,128,.12)}
@@ -278,6 +280,7 @@
     <div id="rules-toggle"><span>⚙️</span><span>Правила распознавания</span></div>
     <div id="ai-toggle"><span id="ai-ic">🤖</span><span id="ai-label">Умный разбор (ИИ)</span></div>
     <div id="aikey-toggle"><span>🔑</span><span id="aikey-label">Ключ ИИ</span></div>
+    <div id="aitest-toggle"><span>🔍</span><span>Проверить ИИ</span></div>
     <div id="sync-toggle" style="display:none"><span id="sync-ic">☁️</span><span id="sync-label">Синхронизация</span></div>
   </aside>
   <main id="main">
@@ -1133,6 +1136,29 @@ document.getElementById('aikey-toggle').onclick=()=>{
   applyAiKeyUI();applyAiUI();
 };
 applyAiKeyUI();
+
+// ---------- AI self-test (диагностика) ----------
+document.getElementById('aitest-toggle').onclick=async()=>{
+  if(!GEMINI_KEY){alert('Ключ ИИ не задан в этом браузере.\nНажми 🔑 «Ключ ИИ» и вставь свой Gemini API-ключ, потом повтори проверку.');return;}
+  const el=document.getElementById('aitest-toggle');const lbl=el.querySelector('span:last-child');const old=lbl.textContent;
+  lbl.textContent='Проверяю…';el.style.pointerEvents='none';
+  const lines=[];let ok=null;
+  for(const model of GEMINI_MODELS){
+    try{
+      const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(GEMINI_KEY),{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({contents:[{parts:[{text:'ответь одним словом: тест'}]}]})
+      });
+      if(res.ok){lines.push('✅ '+model+' — работает');if(!ok)ok=model;}
+      else{let t='';try{t=(await res.text()).slice(0,140)}catch(e){}lines.push('❌ '+model+' — HTTP '+res.status+(t?'\n   '+t:''));}
+    }catch(e){lines.push('❌ '+model+' — нет связи: '+((e&&e.message)||e));}
+  }
+  let head;
+  if(ok)head='ИИ РАБОТАЕТ ✅\nОтвечает модель: '+ok+'\n\nЕсли проект всё равно не определяется — проверь, что «Умный разбор (ИИ)» включён (🤖), и что в «Правилах распознавания» есть нужные проекты.\n\n';
+  else head='ИИ НЕ РАБОТАЕТ ❌\nНи одна модель не ответила. Причина ниже:\n\n';
+  alert(head+lines.join('\n'));
+  lbl.textContent=old;el.style.pointerEvents='';
+};
 
 // ---------- chat planner ----------
 let chatHistory=[]; // {role:'user'|'model', text}
