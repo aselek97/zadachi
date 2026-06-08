@@ -799,7 +799,10 @@ function addTask(text){ if(!text.trim())return; createTask(parseQuickAdd(text));
 
 // ---------- AI parsing (Gemini) ----------
 let GEMINI_KEY=localStorage.getItem('geminiKey')||'';
-const GEMINI_MODELS=['gemini-flash-latest','gemini-2.5-flash','gemini-2.0-flash','gemini-2.5-flash-lite','gemini-2.0-flash-lite'];
+// Актуальные бесплатные модели (июнь 2026). 2.0-flash отключили 01.06.2026, alias gemini-flash-latest убрали.
+// У каждой модели свой дневной лимит — перебираем по очереди.
+const GEMINI_MODELS=['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3.5-flash','gemini-3.1-flash-lite'];
+let aiLastError='';
 function aiActive(){return !!GEMINI_KEY && state.aiEnabled!==false}
 // Пробует модели по очереди: у каждой свой дневной лимит бесплатной квоты.
 // При 429 (квота)/404/500/503 переходит к следующей модели; иначе бросает ошибку.
@@ -841,13 +844,14 @@ ${state.keywordsText||''}
 - repeat: null|daily|weekdays|weekly|monthly|everyN; repeatN: число для everyN иначе null.
 Верни ТОЛЬКО JSON с полями: title, project, labels, due, dueTime, priority, repeat, repeatN.`;
   let j;
+  aiLastError='';
   try{
     j=await geminiGenerate({
       systemInstruction:{parts:[{text:sys}]},
       contents:[{parts:[{text:text}]}],
       generationConfig:{responseMimeType:'application/json',temperature:0.2}
     });
-  }catch(e){return null;}
+  }catch(e){aiLastError=(e&&e.message)||'нет связи';return null;}
   const txt=j?.candidates?.[0]?.content?.parts?.[0]?.text;
   if(!txt)return null;
   let o; try{o=JSON.parse(txt)}catch(e){return null}
@@ -870,7 +874,14 @@ async function aiAddTask(text){
     if(ai&&ai.title){p=ai;usedAI=true;}
   }catch(e){console.warn('ИИ недоступен, использую правила:',e&&e.message)}
   createTask(p);
-  if(!usedAI)toast('ИИ недоступен (лимит на сегодня) — разобрала по правилам');
+  if(!usedAI){
+    let why='разобрала по правилам';
+    if(/429/.test(aiLastError))why='лимит ИИ на сегодня исчерпан — по правилам';
+    else if(/40[03]/.test(aiLastError))why='ключ ИИ не принят (проверь 🔑) — по правилам';
+    else if(/404/.test(aiLastError))why='модель ИИ недоступна — по правилам';
+    else if(aiLastError)why='ИИ: '+aiLastError.slice(0,60)+' — по правилам';
+    toast(why);
+  }
 }
 async function submitQuickAdd(){
   const i=document.getElementById('qa-input');const text=i.value;
