@@ -920,6 +920,27 @@ function renderSubEditor(){
   document.getElementById('m-subs').innerHTML=editSubs.map((s,i)=>
     `<div class="sub-edit-row"><input data-subi="${i}" value="${esc(s.title)}" placeholder="Подзадача"><button type="button" class="sub-move" data-subup="${i}" title="Выше"${i===0?' disabled':''}>↑</button><button type="button" class="sub-move" data-subdown="${i}" title="Ниже"${i===editSubs.length-1?' disabled':''}>↓</button><button type="button" data-subdel="${i}" title="Удалить">×</button></div>`).join('');
 }
+// --- защита открытых окон от фоновых обновлений и случайного закрытия ---
+let pendingRemote=null;
+function anyModalOpen(){return document.getElementById('overlay').classList.contains('show')||document.getElementById('rules-overlay').classList.contains('show');}
+function applyRemoteDoc(d){
+  try{
+    const remote=normalize(JSON.parse(d.data));
+    cloud.applyingRemote=true;
+    state=remote;
+    localStorage.setItem(STORE_KEY,JSON.stringify(state));
+    applyTheme();render();
+    cloud.applyingRemote=false;
+  }catch(e){console.warn('Не смог применить облачные данные:',e)}
+}
+function flushPendingRemote(){if(pendingRemote&&!anyModalOpen()){const d=pendingRemote;pendingRemote=null;applyRemoteDoc(d);}}
+// закрытие по фону только если нажатие И отпускание были на самом фоне (не теряем ввод при выделении текста)
+function guardBackdrop(overlayId,closeFn){
+  const ov=document.getElementById(overlayId);let downBg=false;
+  ov.addEventListener('mousedown',e=>{downBg=(e.target.id===overlayId)});
+  ov.addEventListener('touchstart',e=>{downBg=(e.target.id===overlayId)},{passive:true});
+  ov.addEventListener('click',e=>{if(e.target.id===overlayId&&downBg)closeFn();downBg=false;});
+}
 function openModal(id){
   const t=state.tasks.find(x=>x.id===id);if(!t)return;
   editingId=id;
@@ -939,7 +960,7 @@ function openModal(id){
   document.getElementById('overlay').classList.add('show');
   document.getElementById('m-title').focus();
 }
-function closeModal(){document.getElementById('overlay').classList.remove('show');editingId=null;editSubs=[]}
+function closeModal(){document.getElementById('overlay').classList.remove('show');editingId=null;editSubs=[];flushPendingRemote()}
 function saveModal(){
   const t=state.tasks.find(x=>x.id===editingId);if(!t)return;
   t.title=document.getElementById('m-title').value.trim()||t.title;
@@ -1090,7 +1111,7 @@ document.getElementById('m-subs').addEventListener('click',e=>{
   const d=e.target.closest('[data-subdel]');if(d){editSubs.splice(+d.dataset.subdel,1);renderSubEditor()}
 });
 document.getElementById('m-subs').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();document.getElementById('m-sub-add').click()}});
-document.getElementById('overlay').addEventListener('click',e=>{if(e.target.id==='overlay')closeModal()});
+guardBackdrop('overlay',closeModal);
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();closeRules()}});
 
 // ---------- mobile menu ----------
@@ -1106,12 +1127,12 @@ sidebarEl.addEventListener('click',e=>{if(window.innerWidth<=760&&e.target.close
 // ---------- recognition rules modal ----------
 const rulesOverlay=document.getElementById('rules-overlay');
 function openRules(){document.getElementById('rules-text').value=state.keywordsText||'';rulesOverlay.classList.add('show')}
-function closeRules(){rulesOverlay.classList.remove('show')}
+function closeRules(){rulesOverlay.classList.remove('show');flushPendingRemote()}
 document.getElementById('rules-toggle').onclick=openRules;
 document.getElementById('rules-cancel').onclick=closeRules;
 document.getElementById('rules-save').onclick=()=>{state.keywordsText=document.getElementById('rules-text').value;save();closeRules()};
 document.getElementById('rules-reset').onclick=()=>{document.getElementById('rules-text').value=DEFAULT_KEYWORDS};
-rulesOverlay.addEventListener('click',e=>{if(e.target.id==='rules-overlay')closeRules()});
+guardBackdrop('rules-overlay',closeRules);
 
 // ---------- AI toggle ----------
 function applyAiUI(){
@@ -1383,14 +1404,8 @@ async function initCloud(){
         if(!snp.exists())return;
         const d=snp.data(); if(!d||!d.data)return;
         if(d.updatedAt&&state.updatedAt&&d.updatedAt<=state.updatedAt)return; // не новее — пропускаем
-        try{
-          const remote=normalize(JSON.parse(d.data));
-          cloud.applyingRemote=true;
-          state=remote;
-          localStorage.setItem(STORE_KEY,JSON.stringify(state));
-          applyTheme();render();
-          cloud.applyingRemote=false;
-        }catch(e){console.warn('Не смог применить облачные данные:',e)}
+        if(anyModalOpen()){pendingRemote=d;return;} // не трогаем UI, пока открыто окно редактирования
+        applyRemoteDoc(d);
       });
       cloud.ready=true;
       setSyncUI('synced','Синхронизировано');
