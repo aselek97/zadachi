@@ -208,6 +208,9 @@
   body.dark .drop-hover{background:#3a2420 !important}
   .task.drop-hover{background:transparent !important;outline:none;box-shadow:inset 0 2px 0 0 var(--accent)}
   body.dark .task.drop-hover{background:transparent !important}
+  /* зона «в конец дня» под задачами дня (неделя) */
+  .day-end{height:10px;margin:-2px 0 8px;border-radius:6px;transition:height .12s}
+  .day-end.drop-hover{height:30px}
 
   /* Subtask editor in modal */
   .sub-edit-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
@@ -217,6 +220,9 @@
   #m-sub-add{background:none;border:1px dashed #ccc;color:var(--muted);border-radius:7px;padding:7px;width:100%;cursor:pointer;font-size:13px;margin-top:2px}
   #m-sub-add:hover{border-color:var(--accent);color:var(--accent)}
   body.dark #m-sub-add{border-color:#444}
+  .sub-edit-row .sub-move{font-size:15px;padding:2px 4px;color:#aaa}
+  .sub-edit-row .sub-move:hover:not(:disabled){color:var(--accent)}
+  .sub-edit-row .sub-move:disabled{opacity:.25;cursor:default}
 
   /* Mobile menu button + backdrop (hidden on desktop) */
   #menu-btn{display:none;position:fixed;top:10px;left:10px;z-index:40;width:42px;height:42px;border:none;border-radius:10px;background:var(--side);color:var(--text);font-size:20px;cursor:pointer;box-shadow:0 1px 6px rgba(0,0,0,.12);align-items:center;justify-content:center}
@@ -726,8 +732,8 @@ function renderMain(){
       if(d===todayStr())lbl+=' · сегодня';
       html+=`<div class="date-group${d===todayStr()?' today':''}" data-drop-date="${d}">${lbl}</div>`;
       const day=groups[d]||[];
-      if(day.length)day.forEach(t=>html+=taskHTML(t));
-      else html+=`<div class="day-empty">—</div>`;
+      if(day.length){day.forEach(t=>html+=taskHTML(t));html+=`<div class="day-end" data-drop-date="${d}"></div>`;}
+      else html+=`<div class="day-empty" data-drop-date="${d}">—</div>`;
     }
   } else if(view.type==='upcoming'){
     const groups={};
@@ -898,7 +904,7 @@ let editingId=null;
 let editSubs=[];
 function renderSubEditor(){
   document.getElementById('m-subs').innerHTML=editSubs.map((s,i)=>
-    `<div class="sub-edit-row"><input data-subi="${i}" value="${esc(s.title)}" placeholder="Подзадача"><button type="button" data-subdel="${i}">×</button></div>`).join('');
+    `<div class="sub-edit-row"><input data-subi="${i}" value="${esc(s.title)}" placeholder="Подзадача"><button type="button" class="sub-move" data-subup="${i}" title="Выше"${i===0?' disabled':''}>↑</button><button type="button" class="sub-move" data-subdown="${i}" title="Ниже"${i===editSubs.length-1?' disabled':''}>↓</button><button type="button" data-subdel="${i}" title="Удалить">×</button></div>`).join('');
 }
 function openModal(id){
   const t=state.tasks.find(x=>x.id===id);if(!t)return;
@@ -1007,6 +1013,15 @@ document.addEventListener('dragend',e=>{const tk=e.target.closest('.task');if(tk
 function dropTarget(e){return e.target.closest('[data-drop-date],[data-drop-proj]')||e.target.closest('.task')}
 document.addEventListener('dragover',e=>{const z=dropTarget(e);if(z){e.preventDefault();document.querySelectorAll('.drop-hover').forEach(x=>{if(x!==z)x.classList.remove('drop-hover')});z.classList.add('drop-hover')}});
 document.addEventListener('dragleave',e=>{const z=dropTarget(e);if(z&&!z.contains(e.relatedTarget))z.classList.remove('drop-hover')});
+// переносит задачу в конкретный день и ставит её В КОНЕЦ этого дня
+function moveToDayEnd(draggedId,dateStr){
+  const dragged=state.tasks.find(x=>x.id===draggedId);if(!dragged)return;
+  dragged.due=dateStr;
+  const group=state.tasks.filter(x=>!x.done&&(x.due||null)===(dateStr||null)).sort((a,b)=>(a.order||0)-(b.order||0));
+  const gi=group.findIndex(x=>x.id===draggedId);if(gi>=0)group.splice(gi,1);
+  group.push(dragged);
+  group.forEach((x,i)=>x.order=i);
+}
 // reorder dragged task into the same day, just before target
 function reorderTask(draggedId,targetId){
   const dragged=state.tasks.find(x=>x.id===draggedId);
@@ -1028,7 +1043,7 @@ document.addEventListener('drop',e=>{
   const t=state.tasks.find(x=>x.id===id);if(!t){return}
   if(z){
     e.preventDefault();z.classList.remove('drop-hover');
-    if(z.dataset.dropDate!==undefined)t.due=z.dataset.dropDate;
+    if(z.dataset.dropDate!==undefined)moveToDayEnd(id,z.dataset.dropDate);
     if(z.dataset.dropProj!==undefined)t.project=z.dataset.dropProj;
     dragId=null;save();render();return;
   }
@@ -1053,7 +1068,13 @@ document.getElementById('m-cancel').onclick=closeModal;
 document.getElementById('m-del').onclick=()=>{delTask(editingId);closeModal()};
 document.getElementById('m-sub-add').onclick=()=>{editSubs.push({id:uid(),title:'',done:false});renderSubEditor();const ins=document.querySelectorAll('#m-subs input');if(ins.length)ins[ins.length-1].focus()};
 document.getElementById('m-subs').addEventListener('input',e=>{const i=e.target.dataset.subi;if(i!==undefined)editSubs[+i].title=e.target.value});
-document.getElementById('m-subs').addEventListener('click',e=>{const d=e.target.closest('[data-subdel]');if(d){editSubs.splice(+d.dataset.subdel,1);renderSubEditor()}});
+document.getElementById('m-subs').addEventListener('click',e=>{
+  const up=e.target.closest('[data-subup]');
+  if(up){const i=+up.dataset.subup;if(i>0){[editSubs[i-1],editSubs[i]]=[editSubs[i],editSubs[i-1]];renderSubEditor()}return}
+  const dn=e.target.closest('[data-subdown]');
+  if(dn){const i=+dn.dataset.subdown;if(i<editSubs.length-1){[editSubs[i],editSubs[i+1]]=[editSubs[i+1],editSubs[i]];renderSubEditor()}return}
+  const d=e.target.closest('[data-subdel]');if(d){editSubs.splice(+d.dataset.subdel,1);renderSubEditor()}
+});
 document.getElementById('m-subs').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();document.getElementById('m-sub-add').click()}});
 document.getElementById('overlay').addEventListener('click',e=>{if(e.target.id==='overlay')closeModal()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();closeRules()}});
