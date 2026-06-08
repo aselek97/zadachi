@@ -1153,9 +1153,13 @@ document.getElementById('aitest-toggle').onclick=async()=>{
       else{let t='';try{t=(await res.text()).slice(0,140)}catch(e){}lines.push('❌ '+model+' — HTTP '+res.status+(t?'\n   '+t:''));}
     }catch(e){lines.push('❌ '+model+' — нет связи: '+((e&&e.message)||e));}
   }
+  const toggleOn=state.aiEnabled!==false;
+  const status='Умный разбор (🤖): '+(toggleOn?'ВКЛ ✅':'ВЫКЛ ❌ — задачи парсятся правилами, ИИ не вызывается! Включи тумблер 🤖')
+    +'\nИИ применяется к новым задачам: '+(aiActive()?'да':'НЕТ')
+    +'\nПроектов: '+state.projects.length+' | Правила заданы: '+(state.keywordsText&&state.keywordsText.trim()?'да':'нет')+'\n\n';
   let head;
-  if(ok)head='ИИ РАБОТАЕТ ✅\nОтвечает модель: '+ok+'\n\nЕсли проект всё равно не определяется — проверь, что «Умный разбор (ИИ)» включён (🤖), и что в «Правилах распознавания» есть нужные проекты.\n\n';
-  else head='ИИ НЕ РАБОТАЕТ ❌\nНи одна модель не ответила. Причина ниже:\n\n';
+  if(ok)head='ИИ РАБОТАЕТ ✅\nОтвечает модель: '+ok+'\n\n'+status+'Если проект всё равно не определяется при ВКЛ тумблере — значит в «Правилах распознавания» нет привязки слов к нужному проекту.\n\n';
+  else head='ИИ НЕ РАБОТАЕТ ❌\nНи одна модель не ответила. Причина ниже:\n\n'+status;
   alert(head+lines.join('\n'));
   lbl.textContent=old;el.style.pointerEvents='';
 };
