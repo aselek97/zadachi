@@ -33,7 +33,9 @@
   #date-nav{position:relative}
   #date-nav input[type=date]{position:absolute;left:0;bottom:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;pointer-events:none}
   .day-empty{color:var(--muted);font-size:13px;padding:2px 4px 8px;opacity:.6}
-  .nav-section{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);padding:16px 12px 6px;font-weight:700}
+  .nav-section{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);padding:16px 12px 6px;font-weight:700;display:flex;align-items:center}
+  #add-proj{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0 4px;border-radius:5px}
+  #add-proj:hover{background:rgba(128,128,128,.18);color:var(--accent)}
   .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
 
   /* Main */
@@ -279,7 +281,7 @@
   <aside id="sidebar">
     <h1>✓ Мои задачи</h1>
     <div id="nav-fixed"></div>
-    <div class="nav-section">Проекты</div>
+    <div class="nav-section">Проекты<button id="add-proj" title="Новый проект">＋</button></div>
     <div id="nav-projects"></div>
     <div class="nav-section">Метки</div>
     <div id="nav-labels"></div>
@@ -687,6 +689,17 @@ function navItem(type,value,label,icon,dotColor,dropAttr,extra){
   if(type!=='done'&&n>0)count=`<span class="count">${n}</span>`;
   const ic=dotColor?`<span class="dot ic" style="background:${dotColor}"></span>`:`<span class="ic">${icon}</span>`;
   return `<div class="nav-item ${active?'active':''}" data-type="${type}" ${value?`data-value="${value}"`:''} ${dropAttr||''}>${ic}<span>${label}</span>${count}${extra||''}</div>`;
+}
+function addProject(){
+  const nv=prompt('Название нового проекта:');
+  if(nv===null)return;
+  const name=nv.trim();
+  if(!name)return;
+  const exist=state.projects.find(p=>p.toLowerCase()===name.toLowerCase());
+  if(exist){alert('Проект «'+exist+'» уже существует.');view={type:'project',value:exist};refine={project:null,label:null};render();return;}
+  state.projects.push(name);
+  view={type:'project',value:name};refine={project:null,label:null};
+  save();render();toast('Проект «'+name+'» создан');
 }
 function projectMenu(name){
   if(name==='Входящие'){alert('«Входящие» — системный проект, его нельзя изменить или удалить.');return;}
@@ -1170,6 +1183,7 @@ const rulesOverlay=document.getElementById('rules-overlay');
 function openRules(){document.getElementById('rules-text').value=state.keywordsText||'';rulesOverlay.classList.add('show')}
 function closeRules(){rulesOverlay.classList.remove('show');flushPendingRemote()}
 document.getElementById('rules-toggle').onclick=openRules;
+document.getElementById('add-proj').onclick=addProject;
 document.getElementById('rules-cancel').onclick=closeRules;
 document.getElementById('rules-save').onclick=()=>{state.keywordsText=document.getElementById('rules-text').value;save();closeRules()};
 document.getElementById('rules-reset').onclick=()=>{document.getElementById('rules-text').value=DEFAULT_KEYWORDS};
