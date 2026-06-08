@@ -25,6 +25,11 @@
   .nav-item.active{background:#ffefe5;color:var(--accent);font-weight:600}
   .nav-item .ic{width:18px;text-align:center;font-size:15px}
   .nav-item .count{margin-left:auto;font-size:12px;color:var(--muted)}
+  .proj-menu{margin-left:auto;background:none;border:none;color:#bbb;cursor:pointer;font-size:16px;line-height:1;padding:0 5px;border-radius:5px;opacity:0;flex:none}
+  .nav-item .count + .proj-menu{margin-left:6px}
+  .nav-item:hover .proj-menu{opacity:1}
+  .proj-menu:hover{background:rgba(128,128,128,.2);color:var(--text)}
+  body.dark .proj-menu{color:#888}
   #date-nav{position:relative}
   #date-nav input[type=date]{position:absolute;left:0;bottom:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;pointer-events:none}
   .day-empty{color:var(--muted);font-size:13px;padding:2px 4px 8px;opacity:.6}
@@ -241,6 +246,8 @@
     #sidebar.open{transform:translateX(0)}
     #main{padding:64px 0 24px}
     #main-inner{padding:0 16px}
+    /* на телефоне нет наведения — кнопка управления проектом всегда видна и крупнее для пальца */
+    .proj-menu{opacity:.6;font-size:20px;padding:2px 8px}
     #view-title{font-size:20px}
     #quickadd{flex-direction:column;gap:10px}
     #qa-btn{padding:12px;width:100%}
@@ -676,14 +683,45 @@ function renderRefine(){
     (labelChips?`<span class="refine-sep"></span><span class="refine-label">Метка:</span>`+
       `<div class="refine-chip ${!refine.label?'active':''}" data-rlabel="">Все</div>`+labelChips:'');
 }
-function navItem(type,value,label,icon,dotColor,dropAttr){
+function navItem(type,value,label,icon,dotColor,dropAttr,extra){
   const active=view.type===type && (view.value||null)===(value||null);
   let count='';
   const saved={type,value};
   const tmp=view; view=saved; const n=getViewTasks(true).length; view=tmp;
   if(type!=='done'&&n>0)count=`<span class="count">${n}</span>`;
   const ic=dotColor?`<span class="dot ic" style="background:${dotColor}"></span>`:`<span class="ic">${icon}</span>`;
-  return `<div class="nav-item ${active?'active':''}" data-type="${type}" ${value?`data-value="${value}"`:''} ${dropAttr||''}>${ic}<span>${label}</span>${count}</div>`;
+  return `<div class="nav-item ${active?'active':''}" data-type="${type}" ${value?`data-value="${value}"`:''} ${dropAttr||''}>${ic}<span>${label}</span>${count}${extra||''}</div>`;
+}
+function projectMenu(name){
+  if(name==='Входящие'){alert('«Входящие» — системный проект, его нельзя изменить или удалить.');return;}
+  const nv=prompt('Название проекта.\n• Измени текст и нажми ОК — переименовать.\n• Очисти поле и нажми ОК — удалить проект.',name);
+  if(nv===null)return;
+  const newName=nv.trim();
+  if(newName===''){ // ---- удаление ----
+    const cnt=state.tasks.filter(t=>!t.done&&t.project===name).length;
+    if(cnt>0){
+      const ans=prompt('Удаляю проект «'+name+'». В нём '+cnt+' активных задач(и). Что с ними сделать?\n\n1 — перенести во «Входящие»\n2 — удалить вместе с проектом\n\n(любой другой ответ — отмена)','1');
+      if(ans==='1'){state.tasks.forEach(t=>{if(t.project===name)t.project='Входящие';});}
+      else if(ans==='2'){if(!confirm('Точно удалить проект «'+name+'» И все его задачи безвозвратно?'))return;state.tasks=state.tasks.filter(t=>t.project!==name);}
+      else return;
+    } else {
+      if(!confirm('Удалить пустой проект «'+name+'»?'))return;
+      state.tasks=state.tasks.filter(t=>t.project!==name); // на случай выполненных задач в этом проекте
+    }
+    state.projects=state.projects.filter(p=>p!==name);
+    if(view.type==='project'&&view.value===name)view={type:'today'};
+    if(refine.project===name)refine.project=null;
+    save();render();toast('Проект «'+name+'» удалён');
+    return;
+  }
+  // ---- переименование ----
+  if(newName===name)return;
+  if(state.projects.some(p=>p.toLowerCase()===newName.toLowerCase())){alert('Проект с именем «'+newName+'» уже существует.');return;}
+  state.projects=state.projects.map(p=>p===name?newName:p);
+  state.tasks.forEach(t=>{if(t.project===name)t.project=newName;});
+  if(view.type==='project'&&view.value===name)view={type:'project',value:newName};
+  if(refine.project===name)refine.project=newName;
+  save();render();toast('Проект переименован → «'+newName+'»');
 }
 function renderNav(){
   const dateActive=view.type==='date';
@@ -698,7 +736,8 @@ function renderNav(){
     navItem('all',null,'Все задачи','📋')+
     navItem('done',null,'Выполненные','✅');
   document.getElementById('nav-projects').innerHTML=
-    state.projects.map(p=>navItem('project',p,p,null,PROJ_COLOR[p]||'#999',`data-drop-proj="${p}"`)).join('');
+    state.projects.map(p=>navItem('project',p,p,null,PROJ_COLOR[p]||'#999',`data-drop-proj="${p}"`,
+      p==='Входящие'?'':`<button class="proj-menu" data-projmenu="${esc(p)}" title="Переименовать или удалить">⋯</button>`)).join('');
   const labels=[...new Set(state.tasks.flatMap(t=>t.labels))];
   document.getElementById('nav-labels').innerHTML=
     labels.map(l=>`<div class="nav-item ${view.type==='label'&&view.value===l?'active':''}" data-type="label" data-value="${l}"><span class="ic">@</span><span>${l}</span></div>`).join('')||'<div style="font-size:12px;color:#aaa;padding:4px 12px">пока нет</div>';
@@ -1024,6 +1063,8 @@ document.addEventListener('click',e=>{
     if(e.target.id!=='datePick'){const inp=document.getElementById('datePick');if(inp&&inp.showPicker){try{inp.showPicker()}catch(_){inp.focus()}}else if(inp)inp.focus();}
     return;
   }
+  const pmenu=e.target.closest('[data-projmenu]');
+  if(pmenu){e.stopPropagation();projectMenu(pmenu.dataset.projmenu);return}
   const nav=e.target.closest('.nav-item');
   if(nav){
     const ty=nav.dataset.type;
@@ -1126,7 +1167,7 @@ function closeMenu(){sidebarEl.classList.remove('open');backdropEl.classList.rem
 document.getElementById('menu-btn').onclick=openMenu;
 backdropEl.onclick=closeMenu;
 // close drawer after picking anything in the sidebar on mobile
-sidebarEl.addEventListener('click',e=>{if(window.innerWidth<=760&&e.target.closest('.nav-item,#theme-toggle'))closeMenu()});
+sidebarEl.addEventListener('click',e=>{if(window.innerWidth<=760&&e.target.closest('.nav-item,#theme-toggle')&&!e.target.closest('[data-projmenu]'))closeMenu()});
 
 // ---------- recognition rules modal ----------
 const rulesOverlay=document.getElementById('rules-overlay');
