@@ -854,31 +854,104 @@ function addTask(text){ if(!text.trim())return; createTask(parseQuickAdd(text));
 
 // ---------- AI parsing (Gemini) ----------
 let GEMINI_KEY=localStorage.getItem('geminiKey')||'';
-// Актуальные бесплатные модели (июнь 2026). 2.0-flash отключили 01.06.2026, alias gemini-flash-latest убрали.
-// У каждой модели свой дневной лимит — перебираем по очереди.
-const GEMINI_MODELS=['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3.5-flash','gemini-3.1-flash-lite'];
-let aiLastError='';
+// Google регулярно выводит модели из оборота: 2.0-flash отключили 01.06.2026, а с 18.09.2026 модели 2.5
+// закрыты для новых пользователей (404 «no longer available to new users»). Поэтому список моделей берём у самого API
+// (ListModels, кеш на сутки), а этот — запасной, если список получить не удалось.
+const GEMINI_FALLBACK=['gemini-3.8-flash','gemini-3.7-flash','gemini-3.6-flash','gemini-3.5-flash','gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-2.5-flash','gemini-2.5-flash-lite'];
+const GEMINI_API='https://generativelanguage.googleapis.com/v1beta/models';
+const MODELS_KEY='geminiModels';
+let aiLastError=null;
 function aiActive(){return !!GEMINI_KEY && state.aiEnabled!==false}
-// Пробует модели по очереди: у каждой свой дневной лимит бесплатной квоты.
-// При 429 (квота)/404/500/503 переходит к следующей модели; иначе бросает ошибку.
-async function geminiGenerate(payload){
-  let lastErr=null;
-  for(const model of GEMINI_MODELS){
-    let res;
-    try{
-      res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(GEMINI_KEY),{
-        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)
-      });
-    }catch(e){lastErr=e;continue;}
-    if(res.ok)return await res.json();
-    if([429,404,500,503].includes(res.status)){
-      lastErr=new Error('HTTP '+res.status+' ('+model+')');
-      continue; // квота этой модели исчерпана или модель недоступна — пробуем следующую
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// fast (разбор задачи): сначала flash-lite — отвечают быстрее всего; иначе (чат) — сначала полноценные flash.
+// Внутри группы — от новой версии к старой.
+function sortModels(list,fast){
+  const ver=m=>{const x=m.match(/gemini-(\d+)(?:\.(\d+))?/)||[];return (+x[1]||0)*1000+(+x[2]||0)};
+  const lite=m=>/-lite$/.test(m);
+  return list.slice().sort((a,b)=>(lite(a)!==lite(b)?(lite(a)===!!fast?-1:1):0)||ver(b)-ver(a));
+}
+// Кеш списка моделей в этом браузере: {k: хвост ключа, exp, src, why, list, dead:{модель: когда пришёл 404}}.
+function modelCache(){try{const c=JSON.parse(localStorage.getItem(MODELS_KEY)||'null');if(c&&c.k===GEMINI_KEY.slice(-8)&&Array.isArray(c.list)){c.dead=c.dead||{};return c}}catch(e){}return null}
+function saveModelCache(c){c.k=GEMINI_KEY.slice(-8);try{localStorage.setItem(MODELS_KEY,JSON.stringify(c))}catch(e){}}
+async function geminiModels(force){
+  const c=modelCache();
+  if(!force&&c&&Date.now()<c.exp)return c;
+  let nc;
+  const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),5000);
+  try{
+    const r=await fetch(GEMINI_API+'?pageSize=1000&key='+encodeURIComponent(GEMINI_KEY),{signal:ac.signal});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const list=(j.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
+      .map(m=>String(m.name||'').replace(/^models\//,'')).filter(n=>/^gemini-\d+(\.\d+)?-flash(-lite)?$/.test(n));
+    if(!list.length)throw new Error('в списке нет моделей flash');
+    nc={exp:Date.now()+864e5,src:'google',list};
+  }catch(e){
+    // не вышло — берём прошлый список или запасной и пробуем снова через час
+    const why=e&&e.name==='AbortError'?'нет ответа':((e&&e.message)||'нет связи');
+    nc=c?{exp:Date.now()+36e5,src:c.src,why,list:c.list}:{exp:Date.now()+36e5,src:'fallback',why,list:GEMINI_FALLBACK};
+  }finally{clearTimeout(tm)}
+  // 404 помним неделю: закрытая для ключа модель сама не откроется
+  const dead=c?c.dead:{};nc.dead={};
+  for(const m in dead)if(nc.list.includes(m)&&Date.now()-dead[m]<7*864e5)nc.dead[m]=dead[m];
+  saveModelCache(nc);return nc;
+}
+// Один запрос к модели → {ok, status, model, json|msg}. status 0 — нет связи или не успела до дедлайна (timeout).
+async function geminiCall(model,payload,until){
+  const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),Math.max(0,until-Date.now()));
+  try{
+    const r=await fetch(GEMINI_API+'/'+model+':generateContent?key='+encodeURIComponent(GEMINI_KEY),{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:ac.signal
+    });
+    const t=await r.text();
+    if(r.ok)return {ok:true,status:r.status,model,json:JSON.parse(t)};
+    let msg=t;try{msg=JSON.parse(t).error.message||t}catch(e){}
+    return {ok:false,status:r.status,model,msg:String(msg).slice(0,300)};
+  }catch(e){
+    const timeout=!!(e&&e.name==='AbortError');
+    return {ok:false,status:0,model,timeout,msg:timeout?'не успела ответить':((e&&e.message)||'нет связи')};
+  }finally{clearTimeout(tm)}
+}
+const keyError=r=>r.status===401||r.status===403||(r.status===400&&/api.?key/i.test(r.msg||''));
+// Что показать, если не ответила ни одна модель: перегрузка важнее лимита, лимит важнее 404.
+const errRank=r=>r.status>=500?4:r.status===429?3:r.status===0?2:r.status===404?1:0;
+function aiError(r){const e=new Error(r.msg||('HTTP '+r.status));e.status=r.status;e.model=r.model;e.timeout=!!r.timeout;e.key=keyError(r);return e}
+// Понятная причина сбоя — для тоста и чата
+function aiReason(e){
+  if(!e)return '';
+  if(e.status===undefined)return String(e.message||e);
+  if(e.key)return 'ключ ИИ не принят (проверь 🔑)';
+  if(e.status>=500)return 'ИИ перегружен у Google';
+  if(e.status===429)return 'лимит ИИ на сегодня исчерпан';
+  if(e.status===404)return 'модели ИИ недоступны для этого ключа';
+  if(e.timeout)return 'ИИ не успел ответить';
+  if(e.status===0)return 'нет связи с ИИ';
+  return 'ИИ: '+String(e.message).slice(0,60);
+}
+// Перебирает модели, пока одна не ответит. 404 — модель закрыта для ключа: запоминаем и больше не зовём.
+// 429 (квота) — к следующей. 5xx (перегрузка у Google) и нет связи — к следующей, а после круга пауза 1→2 с
+// и новый круг только по ним (так советует Google). Ключ не принят (400 «API key»/401/403) — сразу ошибка.
+async function geminiGenerate(payload,opt={}){
+  const until=Date.now()+(opt.budget||60000);
+  const c=await geminiModels();
+  let models=sortModels(c.list.filter(m=>!c.dead[m]),opt.fast);
+  if(!models.length)models=sortModels(c.list,opt.fast);
+  let worst=null;
+  for(let round=0;round<3&&models.length;round++){
+    if(round)await sleep(Math.max(0,Math.min(until-Date.now(),1000*2**(round-1)+Math.random()*500)));
+    const again=[];
+    for(const model of models){
+      if(Date.now()>=until)break;
+      const r=await geminiCall(model,payload,until);
+      if(r.ok)return r.json;
+      if(keyError(r))throw aiError(r);
+      if(r.status===404){c.dead[model]=Date.now();saveModelCache(c)}
+      if(r.status>=500||r.status===0)again.push(model);
+      if(!worst||errRank(r)>errRank(worst))worst=r;
     }
-    const t=await res.text();
-    throw new Error('HTTP '+res.status+' '+t.slice(0,120));
+    models=again;
   }
-  throw lastErr||new Error('Все модели недоступны');
+  throw aiError(worst||{status:0,msg:'нет доступных моделей'});
 }
 async function askAI(text){
   if(!GEMINI_KEY)return null;
@@ -899,14 +972,15 @@ ${state.keywordsText||''}
 - repeat: null|daily|weekdays|weekly|monthly|everyN; repeatN: число для everyN иначе null.
 Верни ТОЛЬКО JSON с полями: title, project, labels, due, dueTime, priority, repeat, repeatN.`;
   let j;
-  aiLastError='';
+  aiLastError=null;
   try{
+    // temperature не передаём: с июля 2026 новые модели её игнорируют, а следующие будут отвечать на неё ошибкой 400
     j=await geminiGenerate({
       systemInstruction:{parts:[{text:sys}]},
       contents:[{parts:[{text:text}]}],
-      generationConfig:{responseMimeType:'application/json',temperature:0.2}
-    });
-  }catch(e){aiLastError=(e&&e.message)||'нет связи';return null;}
+      generationConfig:{responseMimeType:'application/json'}
+    },{fast:true,budget:12000});
+  }catch(e){aiLastError=e;return null;}
   const txt=j?.candidates?.[0]?.content?.parts?.[0]?.text;
   if(!txt)return null;
   let o; try{o=JSON.parse(txt)}catch(e){return null}
@@ -925,18 +999,12 @@ async function aiAddTask(text){
   const fallback=parseQuickAdd(text); // мгновенный резерв на случай сбоя/таймаута
   let p=fallback,usedAI=false;
   try{
-    const ai=await Promise.race([askAI(text),new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),8000))]);
+    // у askAI свой бюджет 12 с (с повторами при перегрузке Google); гонка — страховка от зависания
+    const ai=await Promise.race([askAI(text),new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),15000))]);
     if(ai&&ai.title){p=ai;usedAI=true;}
   }catch(e){console.warn('ИИ недоступен, использую правила:',e&&e.message)}
   createTask(p);
-  if(!usedAI){
-    let why='разобрала по правилам';
-    if(/429/.test(aiLastError))why='лимит ИИ на сегодня исчерпан — по правилам';
-    else if(/40[03]/.test(aiLastError))why='ключ ИИ не принят (проверь 🔑) — по правилам';
-    else if(/404/.test(aiLastError))why='модель ИИ недоступна — по правилам';
-    else if(aiLastError)why='ИИ: '+aiLastError.slice(0,60)+' — по правилам';
-    toast(why);
-  }
+  if(!usedAI)toast(aiLastError?aiReason(aiLastError)+' — по правилам':'разобрала по правилам');
 }
 async function submitQuickAdd(){
   const i=document.getElementById('qa-input');const text=i.value;
@@ -1214,30 +1282,47 @@ document.getElementById('aikey-toggle').onclick=()=>{
 applyAiKeyUI();
 
 // ---------- AI self-test (диагностика) ----------
+// Свежий список моделей от Google + пробный запрос к каждой (параллельно; при перегрузке — до 3 попыток).
 document.getElementById('aitest-toggle').onclick=async()=>{
   if(!GEMINI_KEY){alert('Ключ ИИ не задан в этом браузере.\nНажми 🔑 «Ключ ИИ» и вставь свой Gemini API-ключ, потом повтори проверку.');return;}
   const el=document.getElementById('aitest-toggle');const lbl=el.querySelector('span:last-child');const old=lbl.textContent;
   lbl.textContent='Проверяю…';el.style.pointerEvents='none';
-  const lines=[];let ok=null;
-  for(const model of GEMINI_MODELS){
-    try{
-      const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(GEMINI_KEY),{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({contents:[{parts:[{text:'ответь одним словом: тест'}]}]})
-      });
-      if(res.ok){lines.push('✅ '+model+' — работает');if(!ok)ok=model;}
-      else{let t='';try{t=(await res.text()).slice(0,140)}catch(e){}lines.push('❌ '+model+' — HTTP '+res.status+(t?'\n   '+t:''));}
-    }catch(e){lines.push('❌ '+model+' — нет связи: '+((e&&e.message)||e));}
-  }
-  const toggleOn=state.aiEnabled!==false;
-  const status='Умный разбор (🤖): '+(toggleOn?'ВКЛ ✅':'ВЫКЛ ❌ — задачи парсятся правилами, ИИ не вызывается! Включи тумблер 🤖')
-    +'\nИИ применяется к новым задачам: '+(aiActive()?'да':'НЕТ')
-    +'\nПроектов: '+state.projects.length+' | Правила заданы: '+(state.keywordsText&&state.keywordsText.trim()?'да':'нет')+'\n\n';
-  let head;
-  if(ok)head='ИИ РАБОТАЕТ ✅\nОтвечает модель: '+ok+'\n\n'+status+'Если проект всё равно не определяется при ВКЛ тумблере — значит в «Правилах распознавания» нет привязки слов к нужному проекту.\n\n';
-  else head='ИИ НЕ РАБОТАЕТ ❌\nНи одна модель не ответила. Причина ниже:\n\n'+status;
-  alert(head+lines.join('\n'));
-  lbl.textContent=old;el.style.pointerEvents='';
+  try{
+    const c=await geminiModels(true);
+    const probe={contents:[{parts:[{text:'ответь одним словом: тест'}]}]};
+    const res=await Promise.all(sortModels(c.list,true).map(async m=>{
+      let r;
+      for(let i=0;i<3;i++){
+        if(i)await sleep(1500*i);
+        const t0=Date.now();r=await geminiCall(m,probe,Date.now()+20000);r.ms=Date.now()-t0;
+        if(!(r.status>=500||(r.status===0&&!r.timeout)))break;
+      }
+      return r;
+    }));
+    c.dead={};res.forEach(r=>{if(r.status===404)c.dead[r.model]=Date.now()});saveModelCache(c);
+    const works=fast=>(sortModels(c.list,fast).map(m=>res.find(r=>r.model===m)).find(r=>r&&r.ok)||{}).model;
+    const lines=res.map(r=>{
+      if(r.ok)return '✅ '+r.model+' — работает ('+(r.ms/1000).toFixed(1)+' с)';
+      if(r.status===404)return '⛔ '+r.model+' — '+(/no longer available/i.test(r.msg)?'закрыта Google для новых пользователей':'недоступна для этого ключа')+', пропускается';
+      if(r.status>=500)return '⏳ '+r.model+' — перегружена у Google ('+r.status+'), это временно';
+      if(r.status===429)return '⚠️ '+r.model+' — исчерпан лимит запросов (429)';
+      if(r.status===0)return '❌ '+r.model+' — нет связи: '+r.msg;
+      return '❌ '+r.model+' — HTTP '+r.status+': '+r.msg.slice(0,120);
+    });
+    const toggleOn=state.aiEnabled!==false;
+    const status='Умный разбор (🤖): '+(toggleOn?'ВКЛ ✅':'ВЫКЛ ❌ — задачи парсятся правилами, ИИ не вызывается! Включи тумблер 🤖')
+      +'\nИИ применяется к новым задачам: '+(aiActive()?'да':'НЕТ')
+      +'\nПроектов: '+state.projects.length+' | Правила заданы: '+(state.keywordsText&&state.keywordsText.trim()?'да':'нет')+'\n\n';
+    const src='Модели ('+(c.src==='google'?'список от Google':'запасной список')+(c.why?'; свежий список Google не отдал: '+c.why:'')+'):\n';
+    let head;
+    if(works(true))head='ИИ РАБОТАЕТ ✅\nРазбор задач: '+works(true)+'\nЧат: '+works(false)+'\n\n'+status+'Если проект всё равно не определяется при ВКЛ тумблере — значит в «Правилах распознавания» нет привязки слов к нужному проекту.\n\n';
+    else if(res.some(keyError))head='КЛЮЧ ИИ НЕ ПРИНЯТ ❌\nGoogle отклонил ключ. Нажми 🔑 «Ключ ИИ» и вставь ключ заново (его выдают на aistudio.google.com → Get API key).\n\n'+status;
+    else if(res.some(r=>r.status>=500))head='ИИ ВРЕМЕННО НЕДОСТУПЕН ⏳\nУ Google перегрузка (ошибка 503) — это на их стороне и обычно проходит само. Пока задачи разбираются по правилам, ИИ подхватится, как только Google начнёт отвечать. Проверку можно повторить позже.\n\n'+status;
+    else if(res.some(r=>r.status===429))head='ЛИМИТ ИИ ИСЧЕРПАН ⏳\nБесплатная квота Google на сегодня закончилась, она обновится в течение суток. Пока задачи разбираются по правилам.\n\n'+status;
+    else if(res.every(r=>r.status===0))head='НЕТ СВЯЗИ С GOOGLE ❌\nПроверь интернет или VPN и повтори проверку.\n\n'+status;
+    else head='ИИ НЕ РАБОТАЕТ ❌\nНи одна модель не ответила. Причина ниже:\n\n'+status;
+    alert(head+src+lines.join('\n'));
+  }finally{lbl.textContent=old;el.style.pointerEvents='';}
 };
 
 // ---------- chat planner ----------
@@ -1361,7 +1446,7 @@ async function chatAI(){
 Если изменения не нужны — "actions": []. В "reply" коротко поясни, что предлагаешь.
 Текущие активные задачи (JSON): ${JSON.stringify(taskCtx)}`;
   const contents=chatHistory.map(m=>({role:m.role==='model'?'model':'user',parts:[{text:m.text}]}));
-  const j=await geminiGenerate({systemInstruction:{parts:[{text:sys}]},contents,generationConfig:{responseMimeType:'application/json',temperature:0.35}});
+  const j=await geminiGenerate({systemInstruction:{parts:[{text:sys}]},contents,generationConfig:{responseMimeType:'application/json'}});
   const txt=j?.candidates?.[0]?.content?.parts?.[0]?.text;
   if(!txt)throw new Error('пустой ответ');
   let o;try{o=JSON.parse(txt)}catch(e){return {reply:txt,actions:[]}}
@@ -1382,7 +1467,7 @@ async function sendChat(){
     if(res.actions&&res.actions.length)renderActions(res.actions);
   }catch(e){
     typing.remove();
-    chatBubble('Не удалось связаться с ИИ: '+(e.message||e),'bot');
+    chatBubble('Не получилось ответить: '+aiReason(e),'bot');
   }finally{sendBtn.disabled=false}
 }
 document.getElementById('chat-fab').onclick=openChat;
